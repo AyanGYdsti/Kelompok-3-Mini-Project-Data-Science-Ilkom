@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -9,7 +10,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
-from sklearn.decomposition import PCA  # <--- NEW: Import PCA
+from sklearn.decomposition import PCA
 from sklearn.svm import SVR
 import plotly.express as px
 import warnings
@@ -59,41 +60,39 @@ st.markdown("""
 @st.cache_data
 def load_and_preprocess_data():
     try:
-        # Load data
+        # Load data using exact filenames from the notebook
         tanaman = pd.read_csv('dataset/Data_Tanaman_Padi_Sumatera.csv')
         iklim = pd.read_csv('dataset/data_iklim_sumatera.csv')
         produktivitas = pd.read_csv('dataset/data_produktivitas_sumatera.csv')
 
-        # Standarisasi nama provinsi
-        for df in [tanaman, iklim, produktivitas]:
-            df['Provinsi'] = df['Provinsi'].astype(str).str.title()
+        # Standardize province names
+        for df_data in [tanaman, iklim, produktivitas]:
+            df_data['Provinsi'] = df_data['Provinsi'].astype(str).str.title()
 
-        # Konversi produktivitas
+        # Convert 'Produktivitas (ku/ha)' to float
         produktivitas['Produktivitas (ku/ha)'] = (
             produktivitas['Produktivitas (ku/ha)']
             .str.replace(',', '.', regex=False)
             .astype(float)
         )
 
-        # ==================== HAPUS DUPLIKAT IKLIM DI TANAMAN ====================
-        kolom_iklim = ['Curah hujan', 'Suhu rata-rata']
-        tanaman = tanaman.drop(columns=[c for c in kolom_iklim if c in tanaman.columns])
+        # ==================== COLUMN DROPPING (as per notebook) ====================
+        # Drop 'Curah hujan' from 'Tanaman' to avoid duplication during merge
+        if 'Curah hujan' in tanaman.columns:
+            tanaman = tanaman.drop(columns=['Curah hujan'])
 
-        # ==================== MERGE DATA ====================
-        df = pd.merge(tanaman, iklim, on=['Provinsi', 'Tahun'], how='inner')
-        df = pd.merge(df, produktivitas, on=['Provinsi', 'Tahun'], how='inner')
+        # Drop 'Suhu Rata-rata (°C)' from 'Iklim' to keep 'Suhu rata-rata' from 'Tanaman'
+        cols_to_drop_iklim = [c for c in iklim.columns if 'Suhu Rata-rata' in c]
+        if cols_to_drop_iklim:
+            iklim = iklim.drop(columns=cols_to_drop_iklim)
 
-        # ==================== RENAME KOLUMN IKLIM ====================
-        rename_map = {}
+        # ==================== MERGE DATA (as per notebook) ====================
+        df_merged = pd.merge(tanaman, iklim, on=['Provinsi', 'Tahun'], how='inner')
+        df_final = pd.merge(df_merged, produktivitas, on=['Provinsi', 'Tahun'], how='inner')
 
-        for col in df.columns:
-            if 'suhu' in col.lower():
-                rename_map[col] = 'Suhu rata-rata (°C)'
-            if 'curah' in col.lower():
-                rename_map[col] = 'Curah Hujan (mm)'
-
-        df = df.rename(columns=rename_map)
-
+        # Ensure consistent column names after merge for later use
+        # The notebook's final df columns are: 'Suhu rata-rata' (from Tanaman), 'Curah Hujan (mm)' (from Iklim)
+        # No specific rename map is needed if previous drops are handled correctly and original names are preserved.
 
         # ==================== OUTLIER CAPPING (IQR) ====================
         def cap_outliers(df, cols):
@@ -105,23 +104,26 @@ def load_and_preprocess_data():
                     df[col] = np.clip(df[col], Q1 - 1.5 * IQR, Q3 + 1.5 * IQR)
             return df
 
-        df = cap_outliers(df, [
+        df_final = cap_outliers(df_final, [
             'Curah Hujan (mm)',
-            'Suhu rata-rata (°C)',
+            'Suhu rata-rata', # Using 'Suhu rata-rata' as per merged notebook df
             'Kelembapan'
         ])
-        # Normalisasi nama kolom (anti typo & beda format)
-        df.columns = (
-            df.columns
+        
+        # Normalisasi nama kolom (anti typo & beda format) - keeping this for robustness
+        df_final.columns = (
+            df_final.columns
             .str.strip()
             .str.replace('  ', ' ')
         )
 
+        return df_final
 
-        return df
-
+    except FileNotFoundError as e:
+        st.error(f"Gagal memuat data. Pastikan file CSV tersedia di folder: {e}")
+        return None
     except Exception as e:
-        st.error(f"Gagal memuat data: {e}")
+        st.error(f"Terjadi kesalahan saat memproses data: {e}")
         return None
 
 # ==================== HEADER ====================
@@ -138,7 +140,7 @@ with st.expander("ℹ️ Tentang Dashboard", expanded=False):
     - 📈 Tren Temporal Produksi
     - 🗺️ Analisis Regional per Provinsi
     - 🎯 Clustering & Zonasi Iklim (Dinamika Perubahan & PCA Biplot)
-    - 🤖 Pemodelan Prediktif Machine Learning (Target: Produksi)
+    - 🤖 Pemodelan Prediktif Machine Learning (Target: Produktivitas ku/ha)
     """)
 
 # ==================== SIDEBAR ====================
@@ -219,13 +221,14 @@ elif selected_analysis == "🔗 Analisis Korelasi":
 
     st.subheader("🔥 Heatmap Korelasi")
 
+    # Using columns as present in the notebook's df_final and correlation section
     corr_cols = [
         'Produksi',
         'Produktivitas (ku/ha)',
         'Luas Panen',
         'Curah Hujan (mm)',
         'Kelembapan',
-        'Suhu rata-rata (°C)',
+        'Suhu rata-rata', # Changed to match notebook's merged df
         'Lama Penyinaran Matahari (%)'
     ]
 
@@ -239,7 +242,7 @@ elif selected_analysis == "🔗 Analisis Korelasi":
     plt.tight_layout()
     st.pyplot(fig)
 
-    st.subheader("📊 Korelasi dengan Produksi")
+    st.subheader("📊 Korelasi dengan Produktivitas (ku/ha)") # Changed title to reflect notebook analysis
 
     relevant_columns = [
         'Produksi',
@@ -247,12 +250,12 @@ elif selected_analysis == "🔗 Analisis Korelasi":
         'Luas Panen',
         'Curah Hujan (mm)',
         'Kelembapan',
-        'Suhu rata-rata (°C)',
+        'Suhu rata-rata', # Changed to match notebook's merged df
         'Lama Penyinaran Matahari (%)'
     ]
 
     df_correlation = df_filtered[relevant_columns].corr()
-    corr_target = df_correlation['Produksi'].drop('Produksi').sort_values(ascending=True)
+    corr_target = df_correlation['Produktivitas (ku/ha)'].drop('Produktivitas (ku/ha)').sort_values(ascending=True); # Changed target to Produktivitas (ku/ha)
 
     correlation_threshold = st.slider("Threshold Korelasi", 0.0, 1.0, 0.1, 0.05)
     selected_features = corr_target[abs(corr_target) >= correlation_threshold]
@@ -263,7 +266,7 @@ elif selected_analysis == "🔗 Analisis Korelasi":
     ax.axvline(x=correlation_threshold, color='red', linewidth=1.2, linestyle='--', alpha=0.7)
     ax.axvline(x=-correlation_threshold, color='red', linewidth=1.2, linestyle='--', alpha=0.7)
     ax.axvline(x=0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
-    ax.set_title(f'Korelasi dengan Produksi (threshold ≥ {correlation_threshold})', fontweight='bold')
+    ax.set_title(f'Korelasi dengan Produktivitas (threshold ≥ {correlation_threshold})', fontweight='bold') # Changed title
     ax.set_xlabel('Nilai Korelasi')
     ax.set_ylabel('Variabel')
     ax.grid(axis='x', linestyle='--', alpha=0.3)
@@ -276,7 +279,8 @@ elif selected_analysis == "📈 Tren Temporal":
 
     df_trend = df_filtered.groupby('Tahun').mean(numeric_only=True).reset_index()
 
-    trend_cols = ['Produksi', 'Produktivitas (ku/ha)', 'Kelembapan', 'Lama Penyinaran Matahari (%)']
+    # These columns are directly used in notebook's trend analysis
+    trend_cols = ['Produksi', 'Produktivitas (ku/ha)', 'Kelembapan', 'Suhu rata-rata', 'Lama Penyinaran Matahari (%)']
 
     selected_trend = st.selectbox("Pilih Variabel untuk Analisis Tren", trend_cols)
 
@@ -284,6 +288,7 @@ elif selected_analysis == "📈 Tren Temporal":
 
     with col1:
         fig, ax = plt.subplots(figsize=(12, 6))
+        # Sum for total production, mean for other climate/productivity factors
         if selected_trend == 'Produksi':
             df_trend_sum = df_filtered.groupby('Tahun')['Produksi'].sum().reset_index()
             sns.lineplot(data=df_trend_sum, x='Tahun', y=selected_trend, marker='o', linewidth=2.5, ax=ax)
@@ -341,14 +346,14 @@ elif selected_analysis == "🗺️ Analisis Regional":
     plt.tight_layout()
     st.pyplot(fig)
 
-    st.subheader("🔍 Korelasi Variabel Iklim dengan Produksi")
+    st.subheader("🔍 Korelasi Variabel Iklim dengan Produktivitas (ku/ha)") # Changed title
 
-    climate_vars = ['Kelembapan', 'Lama Penyinaran Matahari (%)', 'Curah Hujan (mm)', 'Suhu rata-rata (°C)']
+    climate_vars = ['Kelembapan', 'Lama Penyinaran Matahari (%)', 'Curah Hujan (mm)', 'Suhu rata-rata'] # Changed column name
     corr_data = []
 
     for var in climate_vars:
-        if var in df_province.columns and df_province[var].nunique() > 1:
-            corr = df_province['Produksi'].corr(df_province[var])
+        if var in df_province.columns and df_province[var].nunique() > 1 and df_province['Produktivitas (ku/ha)'].nunique() > 1:
+            corr = df_province['Produktivitas (ku/ha)'].corr(df_province[var]) # Target is Produktivitas
             corr_data.append({'Variabel': var, 'Korelasi': corr})
 
     if corr_data:
@@ -357,7 +362,7 @@ elif selected_analysis == "🗺️ Analisis Regional":
         fig, ax = plt.subplots(figsize=(10, 5))
         sns.barplot(data=df_corr_province, x='Korelasi', y='Variabel', palette='viridis', ax=ax)
         ax.axvline(x=0, color='black', linewidth=0.8, linestyle='--')
-        ax.set_title(f'Korelasi Variabel Iklim thd Produksi - {selected_province}', fontsize=14, fontweight='bold')
+        ax.set_title(f'Korelasi Variabel Iklim thd Produktivitas - {selected_province}', fontsize=14, fontweight='bold') # Changed title
         ax.set_xlabel('Nilai Korelasi')
         plt.tight_layout()
         st.pyplot(fig)
@@ -370,264 +375,262 @@ elif selected_analysis == "🎯 Clustering Iklim":
 
     st.info("💡 Clustering membantu mengidentifikasi zonasi iklim. Kita akan melihat karakteristik Produksi di setiap cluster.")
 
+    # Fitur untuk clustering
     clustering_features = [
+        'Curah Hujan (mm)',
         'Lama Penyinaran Matahari (%)',
-        'Kelembapan',
-        'Suhu rata-rata (°C)'
+        'Suhu rata-rata',
+        'Kelembapan'
     ]
 
-    # Drop NA untuk keperluan clustering
+    # Bersihkan Data
     df_clustering = df_filtered[clustering_features].dropna()
 
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(df_clustering)
-
-    # Elbow method
-    st.subheader("📊 Metode Elbow untuk Menentukan Jumlah Cluster Optimal")
-
-    inertia = []
-    K_range = range(1, min(11, len(df_clustering)))
-
-    for k in K_range:
-        kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
-        kmeans.fit(X_scaled)
-        inertia.append(kmeans.inertia_)
-
-    inertia_diff = np.diff(inertia)
-    optimal_k = K_range[np.argmin(inertia_diff) + 2]
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(K_range, inertia, marker='o', linewidth=2, markersize=8)
-    ax.axvline(x=optimal_k, color='red', linestyle='--', linewidth=2, label=f'Optimal K = {optimal_k}')
-    ax.set_xlabel('Jumlah Cluster (K)', fontsize=12)
-    ax.set_ylabel('Inertia', fontsize=12)
-    ax.set_title('Elbow Method', fontsize=14, fontweight='bold')
-    ax.grid(True, linestyle='--', alpha=0.3)
-    ax.legend()
-    plt.tight_layout()
-    st.pyplot(fig)
-
-    optimal_k = st.slider("Pilih Jumlah Cluster", 2, 5, 3)
-
-    # KMeans
-    kmeans_model = KMeans(
-        n_clusters=optimal_k,
-        random_state=42,
-        n_init=10
-    )
-
-    df_filtered_copy = df_filtered.copy()
-    cluster_labels = np.full(len(df_filtered_copy), -1)
-    
-    # Mask untuk data valid agar indeks sinkron
-    valid_mask = df_filtered[clustering_features].notna().all(axis=1)
-    
-    # Fit & Predict
-    cluster_labels[valid_mask] = kmeans_model.fit_predict(X_scaled)
-    df_filtered_copy['Cluster'] = cluster_labels
-
-    st.subheader(f"📍 Hasil Clustering (Visualisasi PCA Biplot)")
-
-    # ==========================================
-    # LOGIKA PCA & BIPLOT (REPLACED PLOTLY)
-    # ==========================================
-    
-    # 1. Jalankan PCA
-    pca = PCA(n_components=2)
-    pca_result = pca.fit_transform(X_scaled) # X_scaled derived from valid_mask rows
-
-    # 2. DataFrame untuk Plotting
-    df_pca = pd.DataFrame(pca_result, columns=['PC1', 'PC2'])
-    df_pca['Cluster'] = cluster_labels[valid_mask] # Label cluster pada baris valid
-
-    # 3. Hitung Variance Explained
-    var_ratio = pca.explained_variance_ratio_
-    pc1_info = var_ratio[0] * 100
-    pc2_info = var_ratio[1] * 100
-    total_info = pc1_info + pc2_info
-
-    # 4. Plotting (Matplotlib/Seaborn)
-    fig, ax = plt.subplots(figsize=(12, 8))
-
-    # Scatter plot titik data
-    sns.scatterplot(
-        x='PC1', 
-        y='PC2', 
-        hue='Cluster', 
-        data=df_pca, 
-        palette='viridis', 
-        s=120, 
-        alpha=0.8, 
-        edgecolor='w',
-        ax=ax
-    )
-
-    # Panah Vektor (Biplot)
-    scale_arrow = 3 # Scaling factor agar panah terlihat jelas
-    features = clustering_features # Gunakan nama fitur yang dipakai clustering
-
-    for i, feature in enumerate(features):
-        # Gambar panah
-        ax.arrow(0, 0, 
-                 pca.components_[0, i] * scale_arrow, 
-                 pca.components_[1, i] * scale_arrow,
-                 color='red', alpha=0.5, head_width=0.1)
-        # Tulis label fitur
-        ax.text(pca.components_[0, i] * scale_arrow * 1.15,
-                pca.components_[1, i] * scale_arrow * 1.15,
-                feature, color='darkred', ha='center', va='center', 
-                fontsize=10, weight='bold')
-
-    ax.set_title(f'Visualisasi Cluster K-Means dengan PCA\n(Total Informasi: {total_info:.2f}%)', fontsize=15)
-    ax.set_xlabel(f'Principal Component 1 ({pc1_info:.2f}%)', fontsize=12)
-    ax.set_ylabel(f'Principal Component 2 ({pc2_info:.2f}%)', fontsize=12)
-    ax.legend(title='Cluster', loc='best')
-    ax.grid(True, linestyle='--', alpha=0.3)
-    ax.axhline(0, color='black', linewidth=0.8, linestyle='--')
-    ax.axvline(0, color='black', linewidth=0.8, linestyle='--')
-    
-    st.pyplot(fig)
-
-    # ==========================================
-    # METRIK EVALUASI PCA
-    # ==========================================
-    with st.expander("ℹ️ Detail Evaluasi PCA (Klik untuk melihat)", expanded=True):
-        col_eval1, col_eval2 = st.columns(2)
-        
-        with col_eval1:
-            st.markdown("#### Explained Variance")
-            st.write(f"Seberapa banyak informasi data asli yang tersimpan di grafik 2D ini?")
-            st.metric("PC1 Explained", f"{pc1_info:.2f}%")
-            st.metric("PC2 Explained", f"{pc2_info:.2f}%")
-            st.metric("TOTAL Informasi", f"{total_info:.2f}%")
-            if total_info > 70:
-                st.success("✅ Grafik ini sangat akurat merepresentasikan data asli.")
-            else:
-                st.warning("⚠️ Grafik ini mungkin kehilangan beberapa detail data asli.")
-
-        with col_eval2:
-            st.markdown("#### Loading Scores (Pengaruh Variabel)")
-            st.write("Variabel mana yang paling mempengaruhi pembentukan sumbu X (PC1) dan Y (PC2)?")
-            loadings = pd.DataFrame(
-                pca.components_.T,
-                columns=['PC1', 'PC2'],
-                index=features
-            )
-            st.dataframe(loadings.style.background_gradient(cmap='coolwarm'))
-
-
-    # Stats Cluster
-    col1, col2 = st.columns(2)
-    with col1:
-        st.write("**Distribusi Cluster:**")
-        st.dataframe(df_filtered_copy['Cluster'].value_counts().sort_index())
-    with col2:
-        st.write("**Statistik Produksi (Ton) per Cluster:**")
-        cluster_stats = (
-            df_filtered_copy
-            .groupby('Cluster')['Produksi']
-            .agg(['mean', 'sum', 'std', 'count'])
-        )
-        st.dataframe(cluster_stats, use_container_width=True)
-
-    # ========================================================
-    # 🆕 FITUR TAMBAHAN: HEATMAP DINAMIKA CLUSTER PER TAHUN
-    # ========================================================
-    st.markdown("---")
-    st.subheader("🗓️ Dinamika Perubahan Cluster Agroklimat (2018-2024)")
-    st.write("Visualisasi ini menunjukkan stabilitas kategori iklim suatu provinsi dari tahun ke tahun. Perubahan warna dalam satu baris menandakan perubahan karakteristik iklim.")
-
-    if df_filtered_copy['Tahun'].nunique() > 1:
-        pivot_cluster = df_filtered_copy.pivot(index='Provinsi', columns='Tahun', values='Cluster')
-        fig_height = max(6, len(pivot_cluster) * 0.5)
-
-        fig, ax = plt.subplots(figsize=(12, fig_height))
-        sns.heatmap(pivot_cluster, annot=True, cmap='viridis', cbar=False,
-                   linewidths=1, linecolor='white', ax=ax)
-
-        ax.set_title('Peta Perubahan Cluster per Provinsi', fontsize=14, fontweight='bold', pad=15)
-        ax.set_ylabel('Provinsi', fontsize=12)
-        ax.set_xlabel('Tahun', fontsize=12)
-        plt.tight_layout()
-
-        st.pyplot(fig)
-        st.info("💡 **Tips Membaca:** Angka dalam kotak mewakili ID Cluster. Jika angka berubah dari tahun ke tahun pada provinsi yang sama, berarti terjadi pergeseran karakteristik iklim yang signifikan.")
+    if df_clustering.empty or len(df_clustering) < 2:
+        st.warning("⚠️ Data tidak cukup untuk melakukan clustering. Silakan pilih lebih dari satu tahun atau provinsi.")
     else:
-        st.warning("⚠️ Data yang difilter hanya memiliki 1 tahun. Silakan perluas rentang tahun di Sidebar untuk melihat dinamika perubahan cluster.")
+        # Standardisasi Data
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(df_clustering)
+
+        # ---------------------------------------------------------
+        # MULAI PERBAIKAN: METODE ELBOW GEOMETRIS
+        # ---------------------------------------------------------
+        st.subheader("📊 Metode Elbow untuk Menentukan Jumlah Cluster Optimal")
+
+        # Tentukan Range K (Maksimal 10 atau sejumlah data jika < 10)
+        max_k = min(10, len(df_clustering))
+        range_values = range(1, max_k + 1)
+        inertia = []
+
+        # Hitung Inertia
+        with st.spinner("Menghitung optimal cluster..."):
+            for i in range_values:
+                kmeans = KMeans(n_clusters=i, random_state=42, n_init='auto')
+                kmeans.fit(X_scaled)
+                inertia.append(kmeans.inertia_)
+
+        # Tentukan Optimal K Secara Otomatis (Metode Jarak Titik ke Garis)
+        optimal_k = 1
+        if len(range_values) > 1:
+            p1 = np.array([range_values[0], inertia[0]])
+            p2 = np.array([range_values[-1], inertia[-1]])
+
+            distances = []
+            for i in range(len(range_values)):
+                p = np.array([range_values[i], inertia[i]])
+                # Rumus jarak titik ke garis lurus
+                dist = np.abs(np.cross(p2-p1, p1-p)) / np.linalg.norm(p2-p1)
+                distances.append(dist)
+            
+            # Ambil K dengan jarak terbesar
+            optimal_k = range_values[np.argmax(distances)]
+
+        st.success(f"K Optimal yang ditemukan secara otomatis: **{optimal_k}**")
+
+        # Plotting dengan Garis Merah (Sesuai Referensi)
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(range_values, inertia, marker='o', label='Inertia')
+
+        # >>> GARIS MERAH <<<
+        ax.axvline(x=optimal_k, color='red', linestyle='--', linewidth=2, label=f'Optimal K = {optimal_k}')
+
+        ax.set_xlabel('Number of Clusters')
+        ax.set_ylabel('Inertia')
+        ax.set_title('Elbow Method for Optimal K')
+        ax.legend()
+        ax.grid(True)
+        st.pyplot(fig)
+        
+        # ---------------------------------------------------------
+        # SELESAI PERBAIKAN ELBOW
+        # ---------------------------------------------------------
+
+        # Slider untuk memilih K (Default ke Optimal K yang ditemukan)
+        optimal_k_slider = st.slider("Pilih Jumlah Cluster", 1, max_k, int(optimal_k))
+
+        if optimal_k_slider >= 1:
+            # Jalankan KMeans Final dengan K pilihan user
+            kmeans_model = KMeans(
+                n_clusters=optimal_k_slider,
+                random_state=42,
+                n_init='auto'
+            )
+
+            df_filtered_copy = df_filtered.copy()
+            cluster_labels = np.full(len(df_filtered_copy), -1)
+
+            # Masking untuk sinkronisasi indeks
+            valid_mask = df_filtered[clustering_features].notna().all(axis=1)
+
+            # Fit & Predict
+            cluster_labels[valid_mask] = kmeans_model.fit_predict(X_scaled)
+            df_filtered_copy['Cluster'] = cluster_labels
+
+            st.subheader(f"📍 Hasil Clustering (Visualisasi PCA Biplot)")
+
+            # --- LOGIKA PCA & BIPLOT ---
+            pca = PCA(n_components=2)
+            pca_result = pca.fit_transform(X_scaled)
+
+            df_pca = pd.DataFrame(pca_result, columns=['PC1', 'PC2'])
+            df_pca['Cluster'] = cluster_labels[valid_mask]
+
+            var_ratio = pca.explained_variance_ratio_
+            pc1_info = var_ratio[0] * 100
+            pc2_info = var_ratio[1] * 100
+            total_info = pc1_info + pc2_info
+
+            fig, ax = plt.subplots(figsize=(12, 8))
+
+            # Scatter plot
+            sns.scatterplot(
+                x='PC1', y='PC2', hue='Cluster', data=df_pca,
+                palette='viridis', s=120, alpha=0.8, edgecolor='w', ax=ax
+            )
+
+            # Vektor Biplot
+            scale_arrow = 3 
+            features = clustering_features
+
+            for i, feature in enumerate(features):
+                ax.arrow(0, 0,
+                         pca.components_[0, i] * scale_arrow,
+                         pca.components_[1, i] * scale_arrow,
+                         color='red', alpha=0.5, head_width=0.1)
+                ax.text(pca.components_[0, i] * scale_arrow * 1.15,
+                        pca.components_[1, i] * scale_arrow * 1.15,
+                        feature, color='darkred', ha='center', va='center',
+                        fontsize=10, weight='bold')
+
+            ax.set_title(f'Visualisasi Cluster K-Means dengan PCA\n(Total Informasi: {total_info:.2f}%)', fontsize=15)
+            ax.set_xlabel(f'Principal Component 1 ({pc1_info:.2f}%)', fontsize=12)
+            ax.set_ylabel(f'Principal Component 2 ({pc2_info:.2f}%)', fontsize=12)
+            ax.legend(title='Cluster', loc='best')
+            ax.grid(True, linestyle='--', alpha=0.3)
+            ax.axhline(0, color='black', linewidth=0.8, linestyle='--')
+            ax.axvline(0, color='black', linewidth=0.8, linestyle='--')
+
+            st.pyplot(fig)
+
+            # Statistik Cluster
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write("**Distribusi Cluster:**")
+                st.dataframe(df_filtered_copy['Cluster'].value_counts().sort_index())
+            with col2:
+                st.write("**Statistik Produksi (Ton) per Cluster:**")
+                cluster_stats = (
+                    df_filtered_copy
+                    .groupby('Cluster')['Produksi']
+                    .agg(['mean', 'sum', 'std', 'count'])
+                )
+                st.dataframe(cluster_stats, use_container_width=True)
+
+            # --- Heatmap Dinamika Cluster ---
+            st.markdown("---")
+            st.subheader("🗓️ Dinamika Perubahan Cluster Agroklimat (2018-2024)")
+            
+            if df_filtered_copy['Tahun'].nunique() > 1:
+                pivot_cluster = df_filtered_copy.pivot(index='Provinsi', columns='Tahun', values='Cluster')
+                fig_height = max(6, len(pivot_cluster) * 0.5)
+
+                fig, ax = plt.subplots(figsize=(12, fig_height))
+                sns.heatmap(pivot_cluster, annot=True, cmap='viridis', cbar=False,
+                           linewidths=1, linecolor='white', ax=ax)
+
+                ax.set_title('Peta Perubahan Cluster per Provinsi', fontsize=14, fontweight='bold', pad=15)
+                plt.tight_layout()
+                st.pyplot(fig)
+            else:
+                st.info("ℹ️ Pilih rentang tahun lebih dari 1 untuk melihat dinamika perubahan cluster.")
+
 
 # 🤖 PEMODELAN PREDIKTIF
 elif selected_analysis == "🤖 Pemodelan Prediktif":
-    st.header("🤖 Pemodelan Prediktif Produksi")
+    st.header("🤖 Pemodelan Prediktif Produktivitas (ku/ha)") # Changed title
 
-    st.info("🎯 Membandingkan performa berbagai model machine learning untuk prediksi total Produksi padi.")
+    st.info("🎯 Membandingkan performa berbagai model machine learning untuk prediksi **Produktivitas (ku/ha)** padi.") # Changed target in info
 
+    # Feature columns as used in notebook's predictive modeling section (Hipotesis 3)
     feature_cols = [
-        'Produktivitas (ku/ha)',
+        'Produksi',
         'Luas Panen',
+        'Curah Hujan (mm)',
         'Lama Penyinaran Matahari (%)',
         'Kelembapan',
-        'Suhu rata-rata (°C)'
+        'Suhu rata-rata' # Changed to match notebook's merged df
     ]
 
-    df_model = df_filtered[feature_cols + ['Produksi']].dropna()
+    # Target variable as used in notebook's predictive modeling section (Hipotesis 3)
+    target_col = 'Produktivitas (ku/ha)'
 
-    X = df_model[feature_cols]
-    y = df_model['Produksi']
+    df_model = df_filtered[feature_cols + [target_col]].dropna()
 
-    test_size = st.slider("Ukuran Data Test (%)", 10, 40, 20, 5) / 100
+    if df_model.empty:
+        st.warning("⚠️ Data tidak cukup untuk Pemodelan Prediktif. Silakan sesuaikan filter data.")
+    else:
+        X = df_model[feature_cols]
+        y = df_model[target_col]
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
+        test_size = st.slider("Ukuran Data Test (%)", 10, 40, 20, 5) / 100
 
-    st.write(f"📊 Data Training: {len(X_train)} | Data Testing: {len(X_test)}")
+        # Ensure enough samples for both train and test sets after split
+        if len(X) * (1 - test_size) < 1 or len(X) * test_size < 1:
+            st.warning("⚠️ Ukuran data training atau testing terlalu kecil. Sesuaikan filter data atau ukuran data test.")
+        else:
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
 
-    models = {
-        'Linear Regression': LinearRegression(),
-        'Random Forest': RandomForestRegressor(random_state=42, n_estimators=100),
-        'SVR': SVR()
-    }
+            st.write(f"📊 Data Training: {len(X_train)} | Data Testing: {len(X_test)}")
 
-    results = []
+            models = {
+                'Linear Regression': LinearRegression(),
+                'Random Forest': RandomForestRegressor(random_state=42, n_estimators=100),
+                'SVR': SVR()
+            }
 
-    with st.spinner('🔄 Training models...'):
-        for name, model in models.items():
-            model.fit(X_train, y_train)
-            y_pred = model.predict(X_test)
+            results = []
 
-            mae = mean_absolute_error(y_test, y_pred)
-            mse = mean_squared_error(y_test, y_pred)
-            rmse = np.sqrt(mse)
-            r2 = r2_score(y_test, y_pred)
+            with st.spinner('🔄 Training models...'):
+                for name, model in models.items():
+                    model.fit(X_train, y_train)
+                    y_pred = model.predict(X_test) # Corrected typo here
 
-            results.append({
-                'Model': name,
-                'MAE': mae,
-                'RMSE': rmse,
-                'R²': r2
-            })
+                    mae = mean_absolute_error(y_test, y_pred)
+                    mse = mean_squared_error(y_test, y_pred)
+                    rmse = np.sqrt(mse)
+                    r2 = r2_score(y_test, y_pred)
 
-    df_results = pd.DataFrame(results)
+                    results.append({
+                        'Model': name,
+                        'MAE': mae,
+                        'RMSE': rmse,
+                        'R²': r2
+                    })
 
-    st.subheader("📊 Perbandingan Performa Model")
+            df_results = pd.DataFrame(results)
 
-    col1, col2 = st.columns([1, 1])
+            st.subheader("📊 Perbandingan Performa Model")
 
-    with col1:
-        st.dataframe(df_results.style.highlight_min(subset=['MAE', 'RMSE'], color='lightgreen')
-                    .highlight_max(subset=['R²'], color='lightgreen'), use_container_width=True)
+            col1, col2 = st.columns([1, 1])
 
-    with col2:
-        fig, ax = plt.subplots(figsize=(8, 5))
-        df_results.plot(x='Model', y='R²', kind='bar', ax=ax, color='skyblue', legend=False)
-        ax.set_title('Perbandingan R² Score', fontsize=14, fontweight='bold')
-        ax.set_ylabel('R² Score')
-        ax.set_xlabel('')
-        ax.set_xticklabels(df_results['Model'], rotation=45, ha='right')
-        ax.grid(axis='y', linestyle='--', alpha=0.3)
-        plt.tight_layout()
-        st.pyplot(fig)
+            with col1:
+                st.dataframe(df_results.style.highlight_min(subset=['MAE', 'RMSE'], color='lightgreen')
+                            .highlight_max(subset=['R²'], color='lightgreen'), use_container_width=True)
 
-    best_model = df_results.loc[df_results['R²'].idxmax(), 'Model']
-    st.success(f"🏆 Model terbaik: **{best_model}** dengan R² = {df_results['R²'].max():.4f}")
+            with col2:
+                fig, ax = plt.subplots(figsize=(8, 5))
+                df_results.plot(x='Model', y='R²', kind='bar', ax=ax, color='skyblue', legend=False)
+                ax.set_title('Perbandingan R² Score', fontsize=14, fontweight='bold')
+                ax.set_ylabel('R² Score')
+                ax.set_xlabel('')
+                ax.set_xticklabels(df_results['Model'], rotation=45, ha='right')
+                ax.grid(axis='y', linestyle='--', alpha=0.3)
+                plt.tight_layout()
+                st.pyplot(fig)
+
+            best_model = df_results.loc[df_results['R²'].idxmax(), 'Model']
+            st.success(f"🏆 Model terbaik: **{best_model}** dengan R² = {df_results['R²'].max():.4f}")
 
 # ==================== FOOTER ====================
 st.markdown("---")
