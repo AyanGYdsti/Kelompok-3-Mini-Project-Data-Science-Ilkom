@@ -526,7 +526,38 @@ elif selected_analysis == "🎯 Clustering Iklim":
                     .agg(['mean', 'sum', 'std', 'count'])
                 )
                 st.dataframe(cluster_stats, use_container_width=True)
+            st.markdown("---")
+            st.subheader("🌾 Analisis Dampak Cuaca Terhadap Hasil Pertanian")
+            st.info("Bagian ini menganalisis bagaimana perbedaan karakteristik iklim di setiap cluster berdampak pada Produktivitas dan Total Produksi.")
 
+            # --- A. Menghitung Rata-rata Per Cluster ---
+            # Menggunakan df_filtered_copy karena sudah ada kolom 'Cluster'
+            impact_stats = df_filtered_copy.groupby('Cluster')[['Produktivitas (ku/ha)', 'Produksi', 'Luas Panen']].agg(['mean', 'min', 'max'])
+            
+            st.write("**Tabel Rata-rata Indikator Pertanian per Cluster:**")
+            # Menampilkan angka rata-rata (mean) saja sesuai request, diformat agar rapi
+            st.dataframe(impact_stats.xs('mean', axis=1, level=1).round(2), use_container_width=True)
+
+            # --- B. Visualisasi Dampak (Boxplot) ---
+            st.write("**Visualisasi Sebaran Dampak per Cluster:**")
+            
+            fig_impact, ax = plt.subplots(1, 2, figsize=(14, 6))
+
+            # Subplot 1: Produktivitas (Paling Penting)
+            sns.boxplot(x='Cluster', y='Produktivitas (ku/ha)', data=df_filtered_copy, palette='viridis', ax=ax[0])
+            ax[0].set_title('Dampak Iklim terhadap Produktivitas (Efisiensi)', fontsize=12, fontweight='bold')
+            ax[0].set_xlabel("Cluster")
+            ax[0].grid(True, linestyle='--', alpha=0.3)
+
+            # Subplot 2: Produksi (Total Output)
+            sns.boxplot(x='Cluster', y='Produksi', data=df_filtered_copy, palette='viridis', ax=ax[1])
+            ax[1].set_title('Sebaran Total Produksi per Cluster', fontsize=12, fontweight='bold')
+            ax[1].set_xlabel("Cluster")
+            ax[1].grid(True, linestyle='--', alpha=0.3)
+
+            plt.tight_layout()
+            st.pyplot(fig_impact)
+            
             # --- Heatmap Dinamika Cluster ---
             st.markdown("---")
             st.subheader("🗓️ Dinamika Perubahan Cluster Agroklimat (2018-2024)")
